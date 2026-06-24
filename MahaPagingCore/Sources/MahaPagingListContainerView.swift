@@ -134,17 +134,18 @@ open class MahaPagingListContainerView: UIView {
     }
     weak var delegate: MahaPagingListContainerViewDelegate?
     public private(set) var currentIndex: Int = 0
-    private var collectionView: UICollectionView!
-    private var containerVC: MahaPagingListContainerViewController!
-    private var willAppearIndex: Int = -1
-    private var willDisappearIndex: Int = -1
+    private var listCollectionView: UICollectionView!
+    private var containerViewController: MahaPagingListContainerViewController!
+    private var pendingAppearIndex: Int = -1
+    private var pendingDisappearIndex: Int = -1
+    private let collectionViewCellReuseIdentifier = "cell"
 
     public init(dataSource: MahaPagingListContainerViewDataSource, type: MahaPagingListContainerType = .collectionView) {
         self.dataSource = dataSource
         self.type = type
         super.init(frame: CGRect.zero)
 
-        commonInit()
+        configureViewHierarchy()
     }
 
     required public init?(coder aDecoder: NSCoder) {
@@ -152,76 +153,91 @@ open class MahaPagingListContainerView: UIView {
     }
 
     open func commonInit() {
+        configureViewHierarchy()
+    }
+
+    private func configureViewHierarchy() {
         guard let dataSource = dataSource else { return }
-        containerVC = MahaPagingListContainerViewController()
-        containerVC.view.backgroundColor = .clear
-        addSubview(containerVC.view)
-        containerVC.viewWillAppearClosure = {[weak self] in
+        configureContainerViewController()
+        if type == .scrollView {
+            configurePagingScrollView(using: dataSource)
+        } else if type == .collectionView {
+            configurePagingCollectionView(using: dataSource)
+        }
+    }
+
+    private func configureContainerViewController() {
+        containerViewController = MahaPagingListContainerViewController()
+        containerViewController.view.backgroundColor = .clear
+        addSubview(containerViewController.view)
+        containerViewController.viewWillAppearClosure = { [weak self] in
             self?.listWillAppear(at: self?.currentIndex ?? 0)
         }
-        containerVC.viewDidAppearClosure = {[weak self] in
+        containerViewController.viewDidAppearClosure = { [weak self] in
             self?.listDidAppear(at: self?.currentIndex ?? 0)
         }
-        containerVC.viewWillDisappearClosure = {[weak self] in
+        containerViewController.viewWillDisappearClosure = { [weak self] in
             self?.listWillDisappear(at: self?.currentIndex ?? 0)
         }
-        containerVC.viewDidDisappearClosure = {[weak self] in
+        containerViewController.viewDidDisappearClosure = { [weak self] in
             self?.listDidDisappear(at: self?.currentIndex ?? 0)
         }
-        if type == .scrollView {
-            if let scrollViewClass = dataSource.scrollViewClass(in: self) as? UIScrollView.Type {
-                scrollView = scrollViewClass.init()
-            }else {
-                scrollView = MahaPagingListContainerScrollView.init()
-            }
-            scrollView.backgroundColor = .clear
-            scrollView.delegate = self
-            scrollView.isPagingEnabled = true
-            scrollView.showsVerticalScrollIndicator = false
-            scrollView.showsHorizontalScrollIndicator = false
-            scrollView.scrollsToTop = false
-            scrollView.bounces = false
-            if #available(iOS 11.0, *) {
-                scrollView.contentInsetAdjustmentBehavior = .never
-            }
-            containerVC.view.addSubview(scrollView)
-        }else if type == .collectionView {
-            let layout = MahaRTLFlowLayout()
-            layout.scrollDirection = .horizontal
-            layout.minimumLineSpacing = 0
-            layout.minimumInteritemSpacing = 0
-            if let collectionViewClass = dataSource.scrollViewClass(in: self) as? UICollectionView.Type {
-                collectionView = collectionViewClass.init(frame: CGRect.zero, collectionViewLayout: layout)
-            }else {
-                collectionView = MahaPagingListContainerCollectionView.init(frame: CGRect.zero, collectionViewLayout: layout)
-            }
-            collectionView.backgroundColor = .clear
-            collectionView.isPagingEnabled = true
-            collectionView.showsHorizontalScrollIndicator = false
-            collectionView.showsVerticalScrollIndicator = false
-            collectionView.scrollsToTop = false
-            collectionView.bounces = false
-            collectionView.dataSource = self
-            collectionView.delegate = self
-            collectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "cell")
-            if #available(iOS 10.0, *) {
-                collectionView.isPrefetchingEnabled = false
-            }
-            if #available(iOS 11.0, *) {
-                self.collectionView.contentInsetAdjustmentBehavior = .never
-            }
-            containerVC.view.addSubview(collectionView)
-            //让外部统一访问scrollView
-            scrollView = collectionView
+    }
+
+    private func configurePagingScrollView(using dataSource: MahaPagingListContainerViewDataSource) {
+        if let scrollViewClass = dataSource.scrollViewClass(in: self) as? UIScrollView.Type {
+            scrollView = scrollViewClass.init()
+        } else {
+            scrollView = MahaPagingListContainerScrollView()
         }
+        scrollView.backgroundColor = .clear
+        scrollView.delegate = self
+        scrollView.isPagingEnabled = true
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.scrollsToTop = false
+        scrollView.bounces = false
+        if #available(iOS 11.0, *) {
+            scrollView.contentInsetAdjustmentBehavior = .never
+        }
+        containerViewController.view.addSubview(scrollView)
+    }
+
+    private func configurePagingCollectionView(using dataSource: MahaPagingListContainerViewDataSource) {
+        let layout = MahaRTLFlowLayout()
+        layout.scrollDirection = .horizontal
+        layout.minimumLineSpacing = 0
+        layout.minimumInteritemSpacing = 0
+        if let collectionViewClass = dataSource.scrollViewClass(in: self) as? UICollectionView.Type {
+            listCollectionView = collectionViewClass.init(frame: .zero, collectionViewLayout: layout)
+        } else {
+            listCollectionView = MahaPagingListContainerCollectionView(frame: .zero, collectionViewLayout: layout)
+        }
+        listCollectionView.backgroundColor = .clear
+        listCollectionView.isPagingEnabled = true
+        listCollectionView.showsHorizontalScrollIndicator = false
+        listCollectionView.showsVerticalScrollIndicator = false
+        listCollectionView.scrollsToTop = false
+        listCollectionView.bounces = false
+        listCollectionView.dataSource = self
+        listCollectionView.delegate = self
+        listCollectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: collectionViewCellReuseIdentifier)
+        if #available(iOS 10.0, *) {
+            listCollectionView.isPrefetchingEnabled = false
+        }
+        if #available(iOS 11.0, *) {
+            listCollectionView.contentInsetAdjustmentBehavior = .never
+        }
+        containerViewController.view.addSubview(listCollectionView)
+        scrollView = listCollectionView
     }
 
     open override func willMove(toSuperview newSuperview: UIView?) {
         super.willMove(toSuperview: newSuperview)
         var next: UIResponder? = newSuperview
         while next != nil {
-            if let vc = next as? UIViewController{
-                vc.addChild(containerVC)
+            if let viewController = next as? UIViewController {
+                viewController.addChild(containerViewController)
                 break
             }
             next = next?.next
@@ -232,46 +248,28 @@ open class MahaPagingListContainerView: UIView {
         super.layoutSubviews()
 
         guard let dataSource = dataSource else { return }
-        containerVC.view.frame = bounds
+        containerViewController.view.frame = bounds
         if type == .scrollView {
-            if scrollView.frame == CGRect.zero || scrollView.bounds.size != bounds.size {
-                scrollView.frame = bounds
-                scrollView.contentSize = CGSize(width: scrollView.bounds.size.width*CGFloat(dataSource.numberOfLists(in: self)), height: scrollView.bounds.size.height)
-                for (index, list) in validListDict {
-                    list.listView().frame = CGRect(x: CGFloat(index)*scrollView.bounds.size.width, y: 0, width: scrollView.bounds.size.width, height: scrollView.bounds.size.height)
-                }
-                scrollView.contentOffset = CGPoint(x: CGFloat(currentIndex)*scrollView.bounds.size.width, y: 0)
-            }else {
-                scrollView.frame = bounds
-                scrollView.contentSize = CGSize(width: scrollView.bounds.size.width*CGFloat(dataSource.numberOfLists(in: self)), height: scrollView.bounds.size.height)
-            }
-        }else {
-            if collectionView.frame == CGRect.zero || collectionView.bounds.size != bounds.size {
-                collectionView.frame = bounds
-                collectionView.collectionViewLayout.invalidateLayout()
-                collectionView.reloadData()
-                collectionView.setContentOffset(CGPoint(x: CGFloat(currentIndex)*collectionView.bounds.size.width, y: 0), animated: false)
-            }else {
-                collectionView.frame = bounds
-            }
+            layoutPagingScrollView(using: dataSource)
+        } else {
+            layoutPagingCollectionView()
         }
     }
 
     //MARK: - Maha segmented list container bridge
 
     public func contentScrollView() -> UIScrollView {
-           return scrollView
+        return scrollView
     }
 
     public func scrolling(from leftIndex: Int, to rightIndex: Int, percent: CGFloat, selectedIndex: Int) {
     }
 
     public func didClickSelectedItem(at index: Int) {
-        guard checkIndexValid(index) else {
+        guard isIndexValid(index) else {
             return
         }
-        willAppearIndex = -1
-        willDisappearIndex = -1
+        resetPendingTransitionIndices()
         if currentIndex != index {
             listWillDisappear(at: currentIndex)
             listWillAppear(at: index)
@@ -282,21 +280,13 @@ open class MahaPagingListContainerView: UIView {
 
     public func reloadData() {
         guard let dataSource = dataSource else { return }
-        if currentIndex < 0 || currentIndex >= dataSource.numberOfLists(in: self) {
-            defaultSelectedIndex = 0
-            currentIndex = 0
-        }
-        validListDict.values.forEach { (list) in
-            if let listVC = list as? UIViewController {
-                listVC.removeFromParent()
-            }
-            list.listView().removeFromSuperview()
-        }
+        resetCurrentIndexIfNeeded(listCount: dataSource.numberOfLists(in: self))
+        removeAllLoadedLists()
         validListDict.removeAll()
         if type == .scrollView {
-            scrollView.contentSize = CGSize(width: scrollView.bounds.size.width*CGFloat(dataSource.numberOfLists(in: self)), height: scrollView.bounds.size.height)
-        }else {
-            collectionView.reloadData()
+            updateScrollViewContentSize(listCount: dataSource.numberOfLists(in: self))
+        } else {
+            listCollectionView.reloadData()
         }
         listWillAppear(at: currentIndex)
         listDidAppear(at: currentIndex)
@@ -304,149 +294,227 @@ open class MahaPagingListContainerView: UIView {
 
     //MARK: - Private
     func initListIfNeeded(at index: Int) {
-        guard let dataSource = dataSource else { return }
-        if dataSource.listContainerView(self, canInitListAt: index) == false {
+        guard let list = createListIfNeeded(at: index) else {
             return
         }
-        var existedList = validListDict[index]
-        if existedList != nil {
-            //列表已经创建好了
-            return
-        }
-        existedList = dataSource.listContainerView(self, initListAt: index)
-        guard let list = existedList else {
-            return
-        }
-        if let vc = list as? UIViewController {
-            containerVC.addChild(vc)
-        }
-        validListDict[index] = list
-        switch type {
-            case .scrollView:
-                list.listView().frame = CGRect(x: CGFloat(index)*scrollView.bounds.size.width, y: 0, width: scrollView.bounds.size.width, height: scrollView.bounds.size.height)
-                scrollView.addSubview(list.listView())
-            case .collectionView:
-                if let cell = collectionView.cellForItem(at: IndexPath(item: index, section: 0)) {
-                    cell.contentView.subviews.forEach { $0.removeFromSuperview() }
-                    list.listView().frame = cell.contentView.bounds
-                    cell.contentView.addSubview(list.listView())
-                }
-        }
+        attachListViewIfNeeded(list, at: index)
     }
 
     private func listWillAppear(at index: Int) {
-        guard let dataSource = dataSource else { return }
-        guard checkIndexValid(index) else {
+        guard isIndexValid(index) else {
             return
         }
-        var existedList = validListDict[index]
-        if existedList != nil {
-            existedList?.listWillAppear()
-            if let vc = existedList as? UIViewController {
-                vc.beginAppearanceTransition(true, animated: false)
-            }
-        }else {
-            //当前列表未被创建（页面初始化或通过点击触发的listWillAppear）
-            guard dataSource.listContainerView(self, canInitListAt: index) != false else {
-                return
-            }
-            existedList = dataSource.listContainerView(self, initListAt: index)
-            guard let list = existedList else {
-                return
-            }
-            if let vc = list as? UIViewController {
-                containerVC.addChild(vc)
-            }
-            validListDict[index] = list
-            if type == .scrollView {
-                if list.listView().superview == nil {
-                    list.listView().frame = CGRect(x: CGFloat(index)*scrollView.bounds.size.width, y: 0, width: scrollView.bounds.size.width, height: scrollView.bounds.size.height)
-                    scrollView.addSubview(list.listView())
-                }
-                list.listWillAppear()
-                if let vc = list as? UIViewController {
-                    vc.beginAppearanceTransition(true, animated: false)
-                }
-            }else {
-                let cell = collectionView.cellForItem(at: IndexPath(item: index, section: 0))
-                cell?.contentView.subviews.forEach { $0.removeFromSuperview() }
-                list.listView().frame = cell?.contentView.bounds ?? CGRect.zero
-                cell?.contentView.addSubview(list.listView())
-                list.listWillAppear()
-                if let vc = list as? UIViewController {
-                    vc.beginAppearanceTransition(true, animated: false)
-                }
-            }
+        guard let list = createListIfNeeded(at: index) else {
+            return
         }
+        attachListViewIfNeeded(list, at: index)
+        list.listWillAppear()
+        beginAppearanceTransitionIfNeeded(for: list, appearing: true)
     }
 
     private func listDidAppear(at index: Int) {
-        guard checkIndexValid(index) else {
+        guard isIndexValid(index) else {
             return
         }
         currentIndex = index
         let list = validListDict[index]
         list?.listDidAppear()
-        if let vc = list as? UIViewController {
-            vc.endAppearanceTransition()
-        }
+        endAppearanceTransitionIfNeeded(for: list)
         delegate?.listContainerView(self, listDidAppearAt: index)
     }
 
     private func listWillDisappear(at index: Int) {
-        guard checkIndexValid(index) else {
+        guard isIndexValid(index) else {
             return
         }
         let list = validListDict[index]
         list?.listWillDisappear()
-        if let vc = list as? UIViewController {
-            vc.beginAppearanceTransition(false, animated: false)
-        }
+        beginAppearanceTransitionIfNeeded(for: list, appearing: false)
     }
 
     private func listDidDisappear(at index: Int) {
-        guard checkIndexValid(index) else {
+        guard isIndexValid(index) else {
             return
         }
         let list = validListDict[index]
         list?.listDidDisappear()
-        if let vc = list as? UIViewController {
-            vc.endAppearanceTransition()
-        }
+        endAppearanceTransitionIfNeeded(for: list)
     }
 
-    private func checkIndexValid(_ index: Int) -> Bool {
+    private func isIndexValid(_ index: Int) -> Bool {
         guard let dataSource = dataSource else { return false }
         let count = dataSource.numberOfLists(in: self)
-        if count <= 0 || index >= count {
+        if count <= 0 || index < 0 || index >= count {
             return false
         }
         return true
     }
 
-    private func listDidAppearOrDisappear(scrollView: UIScrollView) {
-        let currentIndexPercent = scrollView.contentOffset.x/scrollView.bounds.size.width
-        if willAppearIndex != -1 || willDisappearIndex != -1 {
-            let disappearIndex = willDisappearIndex
-            let appearIndex = willAppearIndex
-            if willAppearIndex > willDisappearIndex {
-                //将要出现的列表在右边
-                if currentIndexPercent >= CGFloat(willAppearIndex) {
-                    willDisappearIndex = -1
-                    willAppearIndex = -1
-                    listDidDisappear(at: disappearIndex)
-                    listDidAppear(at: appearIndex)
-                }
-            }else {
-                //将要出现的列表在左边
-                if currentIndexPercent <= CGFloat(willAppearIndex) {
-                    willDisappearIndex = -1
-                    willAppearIndex = -1
-                    listDidDisappear(at: disappearIndex)
-                    listDidAppear(at: appearIndex)
-                }
-            }
+    private func createListIfNeeded(at index: Int) -> MahaPagingViewListViewDelegate? {
+        if let existingList = validListDict[index] {
+            return existingList
         }
+        guard let dataSource = dataSource, dataSource.listContainerView(self, canInitListAt: index) else {
+            return nil
+        }
+        let list = dataSource.listContainerView(self, initListAt: index)
+        validListDict[index] = list
+        if let viewController = list as? UIViewController {
+            containerViewController.addChild(viewController)
+        }
+        return list
+    }
+
+    private func attachListViewIfNeeded(_ list: MahaPagingViewListViewDelegate, at index: Int) {
+        switch type {
+        case .scrollView:
+            let listView = list.listView()
+            if listView.superview == nil {
+                listView.frame = frameForListView(at: index)
+                scrollView.addSubview(listView)
+            } else if listView.frame != frameForListView(at: index) {
+                listView.frame = frameForListView(at: index)
+            }
+        case .collectionView:
+            guard let cell = listCollectionView.cellForItem(at: IndexPath(item: index, section: 0)) else {
+                return
+            }
+            cell.contentView.subviews.forEach { $0.removeFromSuperview() }
+            let listView = list.listView()
+            listView.frame = cell.contentView.bounds
+            cell.contentView.addSubview(listView)
+        }
+    }
+
+    private func layoutPagingScrollView(using dataSource: MahaPagingListContainerViewDataSource) {
+        let needsFullLayout = scrollView.frame == .zero || scrollView.bounds.size != bounds.size
+        scrollView.frame = bounds
+        updateScrollViewContentSize(listCount: dataSource.numberOfLists(in: self))
+        guard needsFullLayout else {
+            return
+        }
+        for (index, list) in validListDict {
+            list.listView().frame = frameForListView(at: index)
+        }
+        scrollView.contentOffset = contentOffsetForIndex(currentIndex, in: scrollView)
+    }
+
+    private func layoutPagingCollectionView() {
+        let needsReload = listCollectionView.frame == .zero || listCollectionView.bounds.size != bounds.size
+        listCollectionView.frame = bounds
+        guard needsReload else {
+            return
+        }
+        listCollectionView.collectionViewLayout.invalidateLayout()
+        listCollectionView.reloadData()
+        listCollectionView.setContentOffset(contentOffsetForIndex(currentIndex, in: listCollectionView), animated: false)
+    }
+
+    private func updateScrollViewContentSize(listCount: Int) {
+        scrollView.contentSize = CGSize(
+            width: scrollView.bounds.size.width * CGFloat(listCount),
+            height: scrollView.bounds.size.height
+        )
+    }
+
+    private func frameForListView(at index: Int) -> CGRect {
+        return CGRect(
+            x: CGFloat(index) * scrollView.bounds.size.width,
+            y: 0,
+            width: scrollView.bounds.size.width,
+            height: scrollView.bounds.size.height
+        )
+    }
+
+    private func contentOffsetForIndex(_ index: Int, in scrollView: UIScrollView) -> CGPoint {
+        return CGPoint(x: CGFloat(index) * scrollView.bounds.size.width, y: 0)
+    }
+
+    private func resetCurrentIndexIfNeeded(listCount: Int) {
+        guard currentIndex < 0 || currentIndex >= listCount else {
+            return
+        }
+        defaultSelectedIndex = 0
+        currentIndex = 0
+    }
+
+    private func removeAllLoadedLists() {
+        validListDict.values.forEach { list in
+            if let listViewController = list as? UIViewController {
+                listViewController.removeFromParent()
+            }
+            list.listView().removeFromSuperview()
+        }
+    }
+
+    private func resetPendingTransitionIndices() {
+        pendingAppearIndex = -1
+        pendingDisappearIndex = -1
+    }
+
+    private func shouldCompletePendingTransition(at currentIndexPercent: CGFloat) -> Bool {
+        guard pendingAppearIndex != -1 || pendingDisappearIndex != -1 else {
+            return false
+        }
+        if pendingAppearIndex > pendingDisappearIndex {
+            return currentIndexPercent >= CGFloat(pendingAppearIndex)
+        }
+        return currentIndexPercent <= CGFloat(pendingAppearIndex)
+    }
+
+    private func completePendingTransitionIfNeeded(using scrollView: UIScrollView) {
+        let currentIndexPercent = scrollView.contentOffset.x / scrollView.bounds.size.width
+        guard shouldCompletePendingTransition(at: currentIndexPercent) else {
+            return
+        }
+        let disappearIndex = pendingDisappearIndex
+        let appearIndex = pendingAppearIndex
+        resetPendingTransitionIndices()
+        listDidDisappear(at: disappearIndex)
+        listDidAppear(at: appearIndex)
+    }
+
+    private func cancelPendingTransitionIfNeeded() {
+        guard pendingAppearIndex != -1 || pendingDisappearIndex != -1 else {
+            return
+        }
+        listWillDisappear(at: pendingAppearIndex)
+        listWillAppear(at: pendingDisappearIndex)
+        listDidDisappear(at: pendingAppearIndex)
+        listDidAppear(at: pendingDisappearIndex)
+        resetPendingTransitionIndices()
+    }
+
+    private func updatePendingTransition(appearingIndex: Int, disappearingIndex: Int) {
+        if pendingAppearIndex == -1 {
+            pendingAppearIndex = appearingIndex
+            listWillAppear(at: pendingAppearIndex)
+        }
+        if pendingDisappearIndex == -1 {
+            pendingDisappearIndex = disappearingIndex
+            listWillDisappear(at: pendingDisappearIndex)
+        }
+    }
+
+    private func shouldInitializeList(at index: Int, remainderRatio: CGFloat, threshold: CGFloat, movingTowardRight: Bool) -> Bool {
+        if validListDict[index] != nil {
+            return false
+        }
+        return movingTowardRight ? remainderRatio > threshold : remainderRatio < (1 - threshold)
+    }
+
+    private func beginAppearanceTransitionIfNeeded(for list: MahaPagingViewListViewDelegate?, appearing: Bool) {
+        guard let viewController = list as? UIViewController else {
+            return
+        }
+        viewController.beginAppearanceTransition(appearing, animated: false)
+    }
+
+    private func endAppearanceTransitionIfNeeded(for list: MahaPagingViewListViewDelegate?) {
+        guard let viewController = list as? UIViewController else {
+            return
+        }
+        viewController.endAppearanceTransition()
     }
 }
 
@@ -457,7 +525,7 @@ extension MahaPagingListContainerView: UICollectionViewDataSource, UICollectionV
     }
 
     public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "cell", for: indexPath)
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: collectionViewCellReuseIdentifier, for: indexPath)
         cell.contentView.backgroundColor = listCellBackgroundColor
         cell.contentView.subviews.forEach { $0.removeFromSuperview() }
         let list = validListDict[indexPath.item]
@@ -481,58 +549,34 @@ extension MahaPagingListContainerView: UICollectionViewDataSource, UICollectionV
         guard scrollView.isTracking || scrollView.isDragging else {
             return
         }
-        let percent = scrollView.contentOffset.x/scrollView.bounds.size.width
-        let maxCount = Int(round(scrollView.contentSize.width/scrollView.bounds.size.width))
+        let percent = scrollView.contentOffset.x / scrollView.bounds.size.width
+        let maxCount = Int(round(scrollView.contentSize.width / scrollView.bounds.size.width))
         var leftIndex = Int(floor(Double(percent)))
         leftIndex = max(0, min(maxCount - 1, leftIndex))
-        let rightIndex = leftIndex + 1;
+        let rightIndex = leftIndex + 1
         if percent < 0 || rightIndex >= maxCount {
-            listDidAppearOrDisappear(scrollView: scrollView)
+            completePendingTransitionIfNeeded(using: scrollView)
             return
         }
         let remainderRatio = percent - CGFloat(leftIndex)
         if rightIndex == currentIndex {
-            //当前选中的在右边，用户正在从右边往左边滑动
-            if validListDict[leftIndex] == nil && remainderRatio < (1 - initListPercent) {
+            if shouldInitializeList(at: leftIndex, remainderRatio: remainderRatio, threshold: initListPercent, movingTowardRight: false) {
                 initListIfNeeded(at: leftIndex)
-            }else if validListDict[leftIndex] != nil {
-                if willAppearIndex == -1 {
-                    willAppearIndex = leftIndex;
-                    listWillAppear(at: willAppearIndex)
-                }
+            } else if validListDict[leftIndex] != nil {
+                updatePendingTransition(appearingIndex: leftIndex, disappearingIndex: rightIndex)
             }
-            if willDisappearIndex == -1 {
-                willDisappearIndex = rightIndex
-                listWillDisappear(at: willDisappearIndex)
-            }
-        }else {
-            //当前选中的在左边，用户正在从左边往右边滑动
-            if validListDict[rightIndex] == nil && remainderRatio > initListPercent {
+        } else {
+            if shouldInitializeList(at: rightIndex, remainderRatio: remainderRatio, threshold: initListPercent, movingTowardRight: true) {
                 initListIfNeeded(at: rightIndex)
-            }else if validListDict[rightIndex] != nil {
-                if willAppearIndex == -1 {
-                    willAppearIndex = rightIndex
-                    listWillAppear(at: willAppearIndex)
-                }
-            }
-            if willDisappearIndex == -1 {
-                willDisappearIndex = leftIndex
-                listWillDisappear(at: willDisappearIndex)
+            } else if validListDict[rightIndex] != nil {
+                updatePendingTransition(appearingIndex: rightIndex, disappearingIndex: leftIndex)
             }
         }
-        listDidAppearOrDisappear(scrollView: scrollView)
+        completePendingTransitionIfNeeded(using: scrollView)
     }
 
     public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        //滑动到一半又取消滑动处理
-        if willAppearIndex != -1 || willDisappearIndex != -1 {
-            listWillDisappear(at: willAppearIndex)
-            listWillAppear(at: willDisappearIndex)
-            listDidDisappear(at: willAppearIndex)
-            listDidAppear(at: willDisappearIndex)
-            willDisappearIndex = -1
-            willAppearIndex = -1
-        }
+        cancelPendingTransitionIfNeeded()
         delegate?.listContainerViewDidEndScrolling(self)
     }
 

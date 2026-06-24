@@ -48,24 +48,21 @@ open class MahaPagingSmoothView: UIView {
     public weak var delegate: MahaPagingSmoothViewDelegate?
 
     weak var dataSource: MahaPagingSmoothViewDataSource?
-    var listHeaderDict = [Int : UIView]()
-    var isSyncListContentOffsetEnabled: Bool = false
-    let pagingHeaderContainerView: UIView
-    var currentPagingHeaderContainerViewY: CGFloat = 0
-    var currentIndex: Int = 0
-    var currentListScrollView: UIScrollView?
-    var heightForPagingHeader: CGFloat = 0
-    var heightForPinHeader: CGFloat = 0
-    var heightForPagingHeaderContainerView: CGFloat = 0
-    let cellIdentifier = "cell"
-    var currentListInitializeContentOffsetY: CGFloat = 0
-    var singleScrollView: UIScrollView?
+    private var listHeaderViewsByIndex = [Int : UIView]()
+    private var isSynchronizingListContentOffset = false
+    private let pagingHeaderContainerView: UIView
+    private var currentPagingHeaderContainerOriginY: CGFloat = 0
+    private var currentIndex: Int = 0
+    private var currentListScrollView: UIScrollView?
+    private var pagingHeaderHeight: CGFloat = 0
+    private var pinHeaderHeight: CGFloat = 0
+    private var pagingHeaderContainerHeight: CGFloat = 0
+    private let collectionViewCellReuseIdentifier = "cell"
+    private var initialContentOffsetYForNewList: CGFloat = 0
+    private var fallbackScrollView: UIScrollView?
 
     deinit {
-        listDict.values.forEach {
-            $0.listScrollView().removeObserver(self, forKeyPath: "contentOffset")
-            $0.listScrollView().removeObserver(self, forKeyPath: "contentSize")
-        }
+        removeObserversFromAllLists()
     }
 
     public init(dataSource: MahaPagingSmoothViewDataSource) {
@@ -84,14 +81,14 @@ open class MahaPagingSmoothView: UIView {
         listCollectionView.bounces = false
         listCollectionView.showsHorizontalScrollIndicator = false
         listCollectionView.scrollsToTop = false
-        listCollectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: cellIdentifier)
+        listCollectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: collectionViewCellReuseIdentifier)
         if #available(iOS 10.0, *) {
             listCollectionView.isPrefetchingEnabled = false
         }
         if #available(iOS 11.0, *) {
             listCollectionView.contentInsetAdjustmentBehavior = .never
         }
-        listCollectionView.pagingHeaderContainerView = pagingHeaderContainerView
+        listCollectionView.bindPagingHeaderContainerView(pagingHeaderContainerView)
         addSubview(listCollectionView)
     }
 
@@ -101,44 +98,14 @@ open class MahaPagingSmoothView: UIView {
 
     public func reloadData() {
         guard let dataSource = dataSource else { return }
-        currentListScrollView = nil
-        currentIndex = defaultSelectedIndex
-        currentPagingHeaderContainerViewY = 0
-        isSyncListContentOffsetEnabled = false
-
-        listHeaderDict.values.forEach { $0.removeFromSuperview() }
-        listHeaderDict.removeAll()
-        listDict.values.forEach { (list) in
-            list.listScrollView().removeObserver(self, forKeyPath: "contentOffset")
-            list.listScrollView().removeObserver(self, forKeyPath: "contentSize")
-            list.listView().removeFromSuperview()
-        }
-        listDict.removeAll()
-
-        heightForPagingHeader = dataSource.heightForPagingHeader(in: self)
-        heightForPinHeader = dataSource.heightForPinHeader(in: self)
-        heightForPagingHeaderContainerView = heightForPagingHeader + heightForPinHeader
-
-        let pagingHeader = dataSource.viewForPagingHeader(in: self)
-        let pinHeader = dataSource.viewForPinHeader(in: self)
-        pagingHeaderContainerView.addSubview(pagingHeader)
-        pagingHeaderContainerView.addSubview(pinHeader)
-
-        pagingHeaderContainerView.frame = CGRect(x: 0, y: 0, width: bounds.size.width, height: heightForPagingHeaderContainerView)
-        pagingHeader.frame = CGRect(x: 0, y: 0, width: bounds.size.width, height: heightForPagingHeader)
-        pinHeader.frame = CGRect(x: 0, y: heightForPagingHeader, width: bounds.size.width, height: heightForPinHeader)
-        listCollectionView.setContentOffset(CGPoint(x: listCollectionView.bounds.size.width*CGFloat(defaultSelectedIndex), y: 0), animated: false)
+        resetRuntimeState()
+        removeAllListHeaders()
+        removeAllLoadedLists()
+        configureHeaderMetrics(using: dataSource)
+        rebuildPagingHeaderViews(using: dataSource)
+        listCollectionView.setContentOffset(contentOffsetForList(at: defaultSelectedIndex), animated: false)
         listCollectionView.reloadData()
-
-        if dataSource.numberOfLists(in: self) == 0 {
-            singleScrollView = UIScrollView()
-            addSubview(singleScrollView!)
-            singleScrollView?.addSubview(pagingHeader)
-            singleScrollView?.contentSize = CGSize(width: bounds.size.width, height: heightForPagingHeader)
-        }else if singleScrollView != nil {
-            singleScrollView?.removeFromSuperview()
-            singleScrollView = nil
-        }
+        updateFallbackScrollViewIfNeeded(listCount: dataSource.numberOfLists(in: self))
     }
 
     open override func layoutSubviews() {
@@ -148,8 +115,8 @@ open class MahaPagingSmoothView: UIView {
         if pagingHeaderContainerView.frame == CGRect.zero {
             reloadData()
         }
-        if singleScrollView != nil {
-            singleScrollView?.frame = bounds
+        if fallbackScrollView != nil {
+            fallbackScrollView?.frame = bounds
         }
     }
 
@@ -162,34 +129,12 @@ open class MahaPagingSmoothView: UIView {
             return
         }
         currentListScrollView = scrollView
-        let contentOffsetY = scrollView.contentOffset.y + heightForPagingHeaderContainerView
-        if contentOffsetY < heightForPagingHeader {
-            isSyncListContentOffsetEnabled = true
-            currentPagingHeaderContainerViewY = -contentOffsetY
-            for list in listDict.values {
-                if list.listScrollView() != currentListScrollView {
-                    list.listScrollView().setContentOffset(scrollView.contentOffset, animated: false)
-                }
-            }
-            let header = listHeader(for: scrollView)
-            if pagingHeaderContainerView.superview != header {
-                pagingHeaderContainerView.frame.origin.y = 0
-                header?.addSubview(pagingHeaderContainerView)
-            }
-        }else {
-            if pagingHeaderContainerView.superview != self {
-                pagingHeaderContainerView.frame.origin.y = -heightForPagingHeader
-                addSubview(pagingHeaderContainerView)
-            }
-            if isSyncListContentOffsetEnabled {
-                isSyncListContentOffsetEnabled = false
-                currentPagingHeaderContainerViewY = -heightForPagingHeader
-                for list in listDict.values {
-                    if list.listScrollView() != currentListScrollView {
-                        list.listScrollView().setContentOffset(CGPoint(x: 0, y: -heightForPinHeader), animated: false)
-                    }
-                }
-            }
+        let contentOffsetY = scrollView.contentOffset.y + pagingHeaderContainerHeight
+        if contentOffsetY < pagingHeaderHeight {
+            synchronizeHeaderWithCurrentList(scrollView, contentOffsetY: contentOffsetY)
+        } else {
+            pinHeaderToTopIfNeeded()
+            synchronizeSiblingListsAfterHeaderPinnedIfNeeded()
         }
     }
 
@@ -202,14 +147,7 @@ open class MahaPagingSmoothView: UIView {
             }
         }else if keyPath == "contentSize" {
             if let scrollView = object as? UIScrollView {
-                let minContentSizeHeight = bounds.size.height - heightForPinHeader
-                if minContentSizeHeight > scrollView.contentSize.height {
-                    scrollView.contentSize = CGSize(width: scrollView.contentSize.width, height: minContentSizeHeight)
-                    //新的scrollView第一次加载的时候重置contentOffset
-                    if currentListScrollView != nil, scrollView != currentListScrollView! {
-                        scrollView.contentOffset = CGPoint(x: 0, y: currentListInitializeContentOffsetY)
-                    }
-                }
+                ensureMinimumContentSize(for: scrollView)
             }
         }else {
             super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
@@ -220,7 +158,7 @@ open class MahaPagingSmoothView: UIView {
     func listHeader(for listScrollView: UIScrollView) -> UIView? {
         for (index, list) in listDict {
             if list.listScrollView() == listScrollView {
-                return listHeaderDict[index]
+                return listHeaderViewsByIndex[index]
             }
         }
         return nil
@@ -236,18 +174,14 @@ open class MahaPagingSmoothView: UIView {
     }
 
     func listDidAppear(at index: Int) {
-        guard let dataSource = dataSource else { return }
-        let count = dataSource.numberOfLists(in: self)
-        if count <= 0 || index >= count {
+        guard isValidListIndex(index) else {
             return
         }
         listDict[index]?.listDidAppear?()
     }
 
     func listDidDisappear(at index: Int) {
-        guard let dataSource = dataSource else { return }
-        let count = dataSource.numberOfLists(in: self)
-        if count <= 0 || index >= count {
+        guard isValidListIndex(index) else {
             return
         }
         listDict[index]?.listDidDisappear?()
@@ -256,13 +190,208 @@ open class MahaPagingSmoothView: UIView {
     /// 列表左右切换滚动结束之后，需要把pagerHeaderContainerView添加到当前index的列表上面
     func horizontalScrollDidEnd(at index: Int) {
         currentIndex = index
-        guard let listHeader = listHeaderDict[index], let listScrollView = listDict[index]?.listScrollView() else {
+        guard let listHeader = listHeaderViewsByIndex[index], let listScrollView = listDict[index]?.listScrollView() else {
             return
         }
-        listDict.values.forEach { $0.listScrollView().scrollsToTop = ($0.listScrollView() === listScrollView) }
-        if listScrollView.contentOffset.y <= -heightForPinHeader {
+        updateScrollsToTopTarget(using: listScrollView)
+        if listScrollView.contentOffset.y <= -pinHeaderHeight {
             pagingHeaderContainerView.frame.origin.y = 0
             listHeader.addSubview(pagingHeaderContainerView)
+        }
+    }
+
+    private func resetRuntimeState() {
+        currentListScrollView = nil
+        currentIndex = defaultSelectedIndex
+        currentPagingHeaderContainerOriginY = 0
+        isSynchronizingListContentOffset = false
+    }
+
+    private func removeObserversFromAllLists() {
+        listDict.values.forEach { list in
+            let listScrollView = list.listScrollView()
+            listScrollView.removeObserver(self, forKeyPath: "contentOffset")
+            listScrollView.removeObserver(self, forKeyPath: "contentSize")
+        }
+    }
+
+    private func removeAllListHeaders() {
+        listHeaderViewsByIndex.values.forEach { $0.removeFromSuperview() }
+        listHeaderViewsByIndex.removeAll()
+    }
+
+    private func removeAllLoadedLists() {
+        removeObserversFromAllLists()
+        listDict.values.forEach { $0.listView().removeFromSuperview() }
+        listDict.removeAll()
+    }
+
+    private func configureHeaderMetrics(using dataSource: MahaPagingSmoothViewDataSource) {
+        pagingHeaderHeight = dataSource.heightForPagingHeader(in: self)
+        pinHeaderHeight = dataSource.heightForPinHeader(in: self)
+        pagingHeaderContainerHeight = pagingHeaderHeight + pinHeaderHeight
+    }
+
+    private func rebuildPagingHeaderViews(using dataSource: MahaPagingSmoothViewDataSource) {
+        pagingHeaderContainerView.subviews.forEach { $0.removeFromSuperview() }
+        let pagingHeaderView = dataSource.viewForPagingHeader(in: self)
+        let pinHeaderView = dataSource.viewForPinHeader(in: self)
+        pagingHeaderContainerView.addSubview(pagingHeaderView)
+        pagingHeaderContainerView.addSubview(pinHeaderView)
+
+        pagingHeaderContainerView.frame = CGRect(x: 0, y: 0, width: bounds.size.width, height: pagingHeaderContainerHeight)
+        pagingHeaderView.frame = CGRect(x: 0, y: 0, width: bounds.size.width, height: pagingHeaderHeight)
+        pinHeaderView.frame = CGRect(x: 0, y: pagingHeaderHeight, width: bounds.size.width, height: pinHeaderHeight)
+    }
+
+    private func updateFallbackScrollViewIfNeeded(listCount: Int) {
+        if listCount == 0 {
+            let scrollView = fallbackScrollView ?? UIScrollView()
+            if fallbackScrollView == nil {
+                addSubview(scrollView)
+                fallbackScrollView = scrollView
+            }
+            scrollView.frame = bounds
+            if let pagingHeaderView = pagingHeaderContainerView.subviews.first {
+                scrollView.addSubview(pagingHeaderView)
+            }
+            scrollView.contentSize = CGSize(width: bounds.size.width, height: pagingHeaderHeight)
+        } else {
+            fallbackScrollView?.removeFromSuperview()
+            fallbackScrollView = nil
+        }
+    }
+
+    private func synchronizeHeaderWithCurrentList(_ scrollView: UIScrollView, contentOffsetY: CGFloat) {
+        isSynchronizingListContentOffset = true
+        currentPagingHeaderContainerOriginY = -contentOffsetY
+        synchronizeSiblingLists(to: scrollView.contentOffset)
+        if let headerView = listHeader(for: scrollView), pagingHeaderContainerView.superview != headerView {
+            pagingHeaderContainerView.frame.origin.y = 0
+            headerView.addSubview(pagingHeaderContainerView)
+        }
+    }
+
+    private func pinHeaderToTopIfNeeded() {
+        if pagingHeaderContainerView.superview != self {
+            pagingHeaderContainerView.frame.origin.y = -pagingHeaderHeight
+            addSubview(pagingHeaderContainerView)
+        }
+    }
+
+    private func synchronizeSiblingListsAfterHeaderPinnedIfNeeded() {
+        guard isSynchronizingListContentOffset else {
+            return
+        }
+        isSynchronizingListContentOffset = false
+        currentPagingHeaderContainerOriginY = -pagingHeaderHeight
+        synchronizeSiblingLists(to: CGPoint(x: 0, y: -pinHeaderHeight))
+    }
+
+    private func synchronizeSiblingLists(to contentOffset: CGPoint) {
+        for list in listDict.values where list.listScrollView() !== currentListScrollView {
+            list.listScrollView().setContentOffset(contentOffset, animated: false)
+        }
+    }
+
+    private func ensureMinimumContentSize(for scrollView: UIScrollView) {
+        let minimumContentHeight = bounds.size.height - pinHeaderHeight
+        guard minimumContentHeight > scrollView.contentSize.height else {
+            return
+        }
+        scrollView.contentSize = CGSize(width: scrollView.contentSize.width, height: minimumContentHeight)
+        if let currentListScrollView, scrollView != currentListScrollView {
+            scrollView.contentOffset = CGPoint(x: 0, y: initialContentOffsetYForNewList)
+        }
+    }
+
+    private func isValidListIndex(_ index: Int) -> Bool {
+        guard let dataSource = dataSource else { return false }
+        let count = dataSource.numberOfLists(in: self)
+        return count > 0 && index >= 0 && index < count
+    }
+
+    private func contentOffsetForList(at index: Int) -> CGPoint {
+        CGPoint(x: listCollectionView.bounds.size.width * CGFloat(index), y: 0)
+    }
+
+    private func updateScrollsToTopTarget(using scrollView: UIScrollView) {
+        listDict.values.forEach { $0.listScrollView().scrollsToTop = ($0.listScrollView() === scrollView) }
+    }
+
+    private func configuredList(for index: Int, using dataSource: MahaPagingSmoothViewDataSource) -> MahaPagingSmoothViewListViewDelegate {
+        if let existingList = listDict[index] {
+            return existingList
+        }
+
+        let list = dataSource.pagingView(self, initListAtIndex: index)
+        listDict[index] = list
+        prepareListViewForDisplay(list, at: index)
+        return list
+    }
+
+    private func prepareListViewForDisplay(_ list: MahaPagingSmoothViewListViewDelegate, at index: Int) {
+        let listView = list.listView()
+        listView.setNeedsLayout()
+        listView.layoutIfNeeded()
+
+        let listScrollView = list.listScrollView()
+        if listScrollView.isKind(of: UITableView.self) {
+            let tableView = listScrollView as? UITableView
+            tableView?.estimatedRowHeight = 0
+            tableView?.estimatedSectionHeaderHeight = 0
+            tableView?.estimatedSectionFooterHeight = 0
+        }
+        if #available(iOS 11.0, *) {
+            listScrollView.contentInsetAdjustmentBehavior = .never
+        }
+        listScrollView.contentInset = UIEdgeInsets(top: pagingHeaderContainerHeight, left: 0, bottom: 0, right: 0)
+        initialContentOffsetYForNewList = -pagingHeaderContainerHeight + min(-currentPagingHeaderContainerOriginY, pagingHeaderHeight)
+        listScrollView.contentOffset = CGPoint(x: 0, y: initialContentOffsetYForNewList)
+
+        let headerView = UIView(
+            frame: CGRect(
+                x: 0,
+                y: -pagingHeaderContainerHeight,
+                width: bounds.size.width,
+                height: pagingHeaderContainerHeight
+            )
+        )
+        listScrollView.addSubview(headerView)
+        if pagingHeaderContainerView.superview == nil {
+            headerView.addSubview(pagingHeaderContainerView)
+        }
+        listHeaderViewsByIndex[index] = headerView
+        listScrollView.addObserver(self, forKeyPath: "contentOffset", options: .new, context: nil)
+        listScrollView.addObserver(self, forKeyPath: "contentSize", options: .new, context: nil)
+    }
+
+    private func attachListViewIfNeeded(_ list: MahaPagingSmoothViewListViewDelegate, to cell: UICollectionViewCell) {
+        let listView = list.listView()
+        if listView.superview != cell.contentView {
+            cell.contentView.subviews.forEach { $0.removeFromSuperview() }
+            listView.frame = cell.contentView.bounds
+            cell.contentView.addSubview(listView)
+        }
+    }
+
+    private func isAlignedToPage(_ indexPercent: CGFloat, index: Int) -> Bool {
+        indexPercent - CGFloat(index) == 0
+    }
+
+    private func shouldFinishHorizontalScroll(at index: Int, scrollView: UIScrollView) -> Bool {
+        guard index != currentIndex,
+              !(scrollView.isDragging || scrollView.isDecelerating),
+              let listScrollView = listDict[index]?.listScrollView() else {
+            return false
+        }
+        return listScrollView.contentOffset.y <= -pinHeaderHeight
+    }
+
+    private func presentFloatingHeaderDuringHorizontalScrollIfNeeded() {
+        if pagingHeaderContainerView.superview != self {
+            pagingHeaderContainerView.frame.origin.y = currentPagingHeaderContainerOriginY
+            addSubview(pagingHeaderContainerView)
         }
     }
 }
@@ -279,39 +408,10 @@ extension MahaPagingSmoothView: UICollectionViewDataSource, UICollectionViewDele
 
     public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         guard let dataSource = dataSource else { return UICollectionViewCell(frame: CGRect.zero) }
-        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: cellIdentifier, for: indexPath)
-        var list = listDict[indexPath.item]
-        if list == nil {
-            list = dataSource.pagingView(self, initListAtIndex: indexPath.item)
-            listDict[indexPath.item] = list!
-            list?.listView().setNeedsLayout()
-            list?.listView().layoutIfNeeded()
-            if list?.listScrollView().isKind(of: UITableView.self) == true {
-                (list?.listScrollView() as? UITableView)?.estimatedRowHeight = 0
-                (list?.listScrollView() as? UITableView)?.estimatedSectionHeaderHeight = 0
-                (list?.listScrollView() as? UITableView)?.estimatedSectionFooterHeight = 0
-            }
-            if #available(iOS 11.0, *) {
-                list?.listScrollView().contentInsetAdjustmentBehavior = .never
-            }
-            list?.listScrollView().contentInset = UIEdgeInsets(top: heightForPagingHeaderContainerView, left: 0, bottom: 0, right: 0)
-            currentListInitializeContentOffsetY = -heightForPagingHeaderContainerView + min(-currentPagingHeaderContainerViewY, heightForPagingHeader)
-            list?.listScrollView().contentOffset = CGPoint(x: 0, y: currentListInitializeContentOffsetY)
-            let listHeader = UIView(frame: CGRect(x: 0, y: -heightForPagingHeaderContainerView, width: bounds.size.width, height: heightForPagingHeaderContainerView))
-            list?.listScrollView().addSubview(listHeader)
-            if pagingHeaderContainerView.superview == nil {
-                listHeader.addSubview(pagingHeaderContainerView)
-            }
-            listHeaderDict[indexPath.item] = listHeader
-            list?.listScrollView().addObserver(self, forKeyPath: "contentOffset", options: .new, context: nil)
-            list?.listScrollView().addObserver(self, forKeyPath: "contentSize", options: .new, context: nil)
-        }
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: collectionViewCellReuseIdentifier, for: indexPath)
+        let list = configuredList(for: indexPath.item, using: dataSource)
         listDict.values.forEach { $0.listScrollView().scrollsToTop = ($0 === list) }
-        if let listView = list?.listView(), listView.superview != cell.contentView {
-            cell.contentView.subviews.forEach { $0.removeFromSuperview() }
-            listView.frame = cell.contentView.bounds
-            cell.contentView.addSubview(listView)
-        }
+        attachListViewIfNeeded(list, to: cell)
         return cell
     }
 
@@ -325,17 +425,12 @@ extension MahaPagingSmoothView: UICollectionViewDataSource, UICollectionViewDele
 
     public func scrollViewDidScroll(_ scrollView: UIScrollView) {
         delegate?.pagingSmoothViewDidScroll?(scrollView)
-        let indexPercent = scrollView.contentOffset.x/scrollView.bounds.size.width
-        let index = Int(scrollView.contentOffset.x/scrollView.bounds.size.width)
-        let listScrollView = listDict[index]?.listScrollView()
-        if (indexPercent - CGFloat(index) == 0) && index != currentIndex && !(scrollView.isDragging || scrollView.isDecelerating) && listScrollView?.contentOffset.y ?? 0 <= -heightForPinHeader {
+        let indexPercent = scrollView.contentOffset.x / scrollView.bounds.size.width
+        let index = Int(scrollView.contentOffset.x / scrollView.bounds.size.width)
+        if isAlignedToPage(indexPercent, index: index) && shouldFinishHorizontalScroll(at: index, scrollView: scrollView) {
             horizontalScrollDidEnd(at: index)
-        }else {
-            //左右滚动的时候，就把listHeaderContainerView添加到self，达到悬浮在顶部的效果
-            if pagingHeaderContainerView.superview != self {
-                pagingHeaderContainerView.frame.origin.y = currentPagingHeaderContainerViewY
-                addSubview(pagingHeaderContainerView)
-            }
+        } else {
+            presentFloatingHeaderDuringHorizontalScrollIfNeeded()
         }
         if index != currentIndex {
             currentIndex = index
@@ -344,22 +439,27 @@ extension MahaPagingSmoothView: UICollectionViewDataSource, UICollectionViewDele
 
     public func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate {
-            let index = Int(scrollView.contentOffset.x/scrollView.bounds.size.width)
+            let index = Int(scrollView.contentOffset.x / scrollView.bounds.size.width)
             horizontalScrollDidEnd(at: index)
         }
     }
 
     public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        let index = Int(scrollView.contentOffset.x/scrollView.bounds.size.width)
+        let index = Int(scrollView.contentOffset.x / scrollView.bounds.size.width)
         horizontalScrollDidEnd(at: index)
     }
 }
 
 public class MahaPagingSmoothCollectionView: UICollectionView, UIGestureRecognizerDelegate {
-    var pagingHeaderContainerView: UIView?
+    private var pagingHeaderContainerView: UIView?
+
+    func bindPagingHeaderContainerView(_ pagingHeaderContainerView: UIView) {
+        self.pagingHeaderContainerView = pagingHeaderContainerView
+    }
+
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        let point = touch.location(in: pagingHeaderContainerView)
-        if pagingHeaderContainerView?.bounds.contains(point) == true {
+        let touchPoint = touch.location(in: pagingHeaderContainerView)
+        if pagingHeaderContainerView?.bounds.contains(touchPoint) == true {
             return false
         }
         return true

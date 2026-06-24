@@ -17,10 +17,13 @@ open class MahaPagingMainTableView: UITableView, UIGestureRecognizerDelegate {
     public weak var gestureDelegate: MahaPagingMainTableViewGestureDelegate?
 
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        if gestureDelegate != nil {
-            return gestureDelegate!.mainTableViewGestureRecognizer(gestureRecognizer, shouldRecognizeSimultaneouslyWith:otherGestureRecognizer)
-        }else {
-            return gestureRecognizer.isKind(of: UIPanGestureRecognizer.self) && otherGestureRecognizer.isKind(of: UIPanGestureRecognizer.self)
+        if let gestureDelegate {
+            return gestureDelegate.mainTableViewGestureRecognizer(gestureRecognizer, shouldRecognizeSimultaneouslyWith: otherGestureRecognizer)
         }
+        return shouldRecognizePanGestureSimultaneously(gestureRecognizer, with: otherGestureRecognizer)
+    }
+
+    private func shouldRecognizePanGestureSimultaneously(_ gestureRecognizer: UIGestureRecognizer, with otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer.isKind(of: UIPanGestureRecognizer.self) && otherGestureRecognizer.isKind(of: UIPanGestureRecognizer.self)
     }
 }

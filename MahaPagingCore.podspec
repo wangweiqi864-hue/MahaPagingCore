@@ -1,7 +1,7 @@
 
 Pod::Spec.new do |s|
   s.name          = "MahaPagingCore"
-  s.version       = "0.1.0"
+  s.version       = "0.1.1"
   s.summary       = "Maha paging container components."
   s.homepage      = "https://github.com/wangweiqi864-hue/MahaPagingCore"
   s.license       = "MIT"
